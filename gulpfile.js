@@ -8,9 +8,11 @@ const del = require('del')
 const webpackStream = require('webpack-stream')
 const webpack = require('webpack')
 const through = require('through2')
+const vite = require('vite')
 const BundleAnalyzerPlugin =
   require('webpack-bundle-analyzer').BundleAnalyzerPlugin
 const tsconfig = require('./tsconfig.json')
+const packageJson = require('./package.json')
 
 const pxMultiplePlugin = require('postcss-px-multiple')({ times: 2 })
 
@@ -87,6 +89,55 @@ function buildDeclaration() {
     .pipe(gulp.dest('lib/cjs/'))
 }
 
+function getViteConfigForPackage({ minify, formats, external }) {
+  const name = packageJson.name
+  return {
+    root: process.cwd(),
+
+    logLevel: 'silent',
+
+    build: {
+      lib: {
+        name,
+        entry: './lib/es/index.js',
+        formats,
+        fileName: format => {
+          const suffix = format === 'umd' ? '' : `.${format}`
+          return minify ? `${name}${suffix}.min.js` : `${name}${suffix}.js`
+        },
+      },
+      minify: minify ? 'terser' : false,
+      rollupOptions: {
+        external,
+        output: {
+          dir: './lib/bundle',
+          exports: 'named',
+          globals: {
+            react: 'React',
+          },
+        },
+      },
+    },
+  }
+}
+
+async function buildBundles(cb) {
+  const dependencies = packageJson.dependencies || {}
+  const externals = Object.keys(dependencies)
+
+  const configs = [
+    // esm/cjs bundle
+    getViteConfigForPackage({
+      minify: false,
+      formats: ['es', 'cjs'],
+      external: ['react', ...externals],
+    }),
+  ]
+
+  await Promise.all(configs.map(config => vite.build(config)))
+  cb && cb()
+}
+
 function umdWebpack() {
   return gulp
     .src('lib/es/index.js')
@@ -151,8 +202,18 @@ function umdWebpack() {
           },
           externals: [
             {
-              'react': 'React',
-              'react-dom': 'ReactDOM',
+              react: {
+                commonjs: 'react',
+                commonjs2: 'react',
+                amd: 'react',
+                root: 'React',
+              },
+              'react-dom': {
+                commonjs: 'react-dom',
+                commonjs2: 'react-dom',
+                amd: 'react-dom',
+                root: 'ReactDOM',
+              },
             },
           ],
         },
@@ -208,6 +269,7 @@ function build2xCSS() {
 }
 
 exports.umdWebpack = umdWebpack
+exports.buildBundles = buildBundles
 
 exports.default = gulp.series(
   clean,
@@ -218,5 +280,5 @@ exports.default = gulp.series(
   copyMetaFiles,
   generatePackageJSON,
   gulp.series(create2xFolder, build2xCSS),
-  gulp.parallel(umdWebpack)
+  gulp.parallel(umdWebpack, buildBundles)
 )
